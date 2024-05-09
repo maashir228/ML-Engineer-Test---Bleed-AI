@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from io import BytesIO
 from PIL import Image
 import base64
+import io
 # Initialize the app
 app = FastAPI()
 
@@ -45,6 +46,16 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def base64_to_image(base64_string, output_path):
+    # Decode the base64 string to binary data
+    binary_data = base64.b64decode(base64_string)
+
+    # Create PIL image from binary data
+    image = Image.open(BytesIO(binary_data))
+
+    # Save the image to a file
+    image.save(output_path)
 
 # Endpoints
 @app.post("/users/", response_model=int)
@@ -77,16 +88,16 @@ mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils
 
 @app.post("/process-image/")
-async def process_image(image_data: ImageData):
+async def process_image(File: UploadFile = File(...)):
     # Read the image file
-    image_file = await image_data.file.read()
-
+    image_file = await File.read()
+    print(image_file)
     # Convert the image file to a format that MediaPipe can process
     image = Image.open(BytesIO(image_file))
     image = np.array(image)
 
     # Use MediaPipe to detect faces in the image
-    with mp.face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection:
+    with mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection:
         results = face_detection.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
     # If a face is detected, get the facial boundaries and landmarks
@@ -96,17 +107,25 @@ async def process_image(image_data: ImageData):
             ih, iw, _ = image.shape
             x, y, w, h = int(box.xmin * iw), int(box.ymin * ih), int(box.width * iw), int(box.height * ih)
 
-            # Crop the image to the facial boundaries
+            # Crop the image
             cropped_image = image[y:y+h, x:x+w]
 
-            # Convert the cropped image to a format that can be returned in the response
-            cropped_image = Image.fromarray(cropped_image)
-            byte_arr = BytesIO()
-            cropped_image.save(byte_arr, format='PNG')
+            # Convert the cropped image to a base64 string
+            pil_img = Image.fromarray(cropped_image)
+            byte_arr = io.BytesIO()
+            pil_img.save(byte_arr, format='PNG')
             byte_arr = byte_arr.getvalue()
-            cropped_image_str = base64.b64encode(byte_arr).decode('utf-8')
+            base64_str = base64.b64encode(byte_arr).decode()
 
-            # Return the cropped image and landmarks in the response
-            return {"cropped_image": cropped_image_str, "landmarks": detection.location_data.relative_keypoints}
+            # Extract the landmarks
+            landmarks = []
+            for landmark in detection.location_data.relative_keypoints:
+                landmarks.append({
+                    'x': landmark.x,
+                    'y': landmark.y
+                })
+            base64_to_image(base64_str, "cropped_image.png")
+            # Return the facial boundaries, landmarks, and cropped image in the response
+            return {"box": {"x": x, "y": y, "width": w, "height": h}, "landmarks": landmarks, "cropped_image": base64_str}
 
     return {"error": "No face detected"}
