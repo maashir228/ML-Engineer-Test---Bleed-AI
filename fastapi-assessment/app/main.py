@@ -16,6 +16,8 @@ from io import BytesIO
 from PIL import Image
 import base64
 import io
+
+
 # Initialize the app
 app = FastAPI()
 
@@ -64,14 +66,14 @@ def create_new_user(user: UserBase, db: Session = Depends(get_db)):
     return user.id
 
 @app.get("/users/{user_id}")
-def get_user(user_id: int, db: Session = Depends(get_db)):
+async def get_user(user_id: int, db: Session = Depends(get_db)):
     user = get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"id": user.id, "name": user.name}
 
 @app.put("/users/{user_id}")
-def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
+async def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
     user_in_db = get_user_by_id(db, user_id)
     if not user_in_db:
         raise HTTPException(status_code=404, detail="User not found")
