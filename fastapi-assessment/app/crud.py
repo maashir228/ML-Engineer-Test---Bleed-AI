@@ -1,7 +1,7 @@
 # app/crud.py
 from sqlalchemy.orm import Session
 from app.models import User
-
+from sqlalchemy import or_
 # Create a new user
 def create_user(db: Session, name: str) -> User:
     new_user = User(name=name)
@@ -25,4 +25,4 @@ def update_user_name(db: Session, user_id: int, new_name: str) -> User:
 
 # Search for users by name (case-insensitive)
 def search_users_by_name(db: Session, query: str):
-    return db.query(User).filter(User.name.ilike(f"%{query}%")).all()
+    return db.query(User).filter(or_(User.name.ilike(f"%{query}%"))).all()

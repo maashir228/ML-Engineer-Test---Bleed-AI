@@ -5,3 +5,4 @@ mediapipe
 pydantic
 python-jose
 passlib
+PIL

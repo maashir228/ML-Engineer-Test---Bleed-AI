@@ -11,7 +11,10 @@ from app.crud import create_user, get_user_by_id, update_user_name, search_users
 import mediapipe as mp
 import cv2
 import numpy as np
-
+from pydantic import BaseModel
+from io import BytesIO
+from PIL import Image
+import base64
 # Initialize the app
 app = FastAPI()
 
@@ -26,6 +29,15 @@ app.add_middleware(
 # Create the database
 Base.metadata.create_all(bind=engine)
 
+class UserBase(BaseModel):
+    name: str
+
+class UserUpdate(BaseModel):
+    name: str
+
+class ImageData(BaseModel):
+    file: UploadFile
+
 # Dependency to get the database session
 def get_db():
     db = SessionLocal()
@@ -36,8 +48,8 @@ def get_db():
 
 # Endpoints
 @app.post("/users/", response_model=int)
-def create_new_user(name: str, db: Session = Depends(get_db)):
-    user = create_user(db, name)
+def create_new_user(user: UserBase, db: Session = Depends(get_db)):
+    user = create_user(db, user.name)
     return user.id
 
 @app.get("/users/{user_id}")
@@ -48,11 +60,11 @@ def get_user(user_id: int, db: Session = Depends(get_db)):
     return {"id": user.id, "name": user.name}
 
 @app.put("/users/{user_id}")
-def update_user(user_id: int, name: str, db: Session = Depends(get_db)):
-    user = get_user_by_id(db, user_id)
-    if not user:
+def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
+    user_in_db = get_user_by_id(db, user_id)
+    if not user_in_db:
         raise HTTPException(status_code=404, detail="User not found")
-    updated_user = update_user_name(db, user_id, name)
+    updated_user = update_user_name(db, user_id, user.name)
     return {"id": updated_user.id, "name": updated_user.name}
 
 @app.get("/search/")
@@ -65,39 +77,36 @@ mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils
 
 @app.post("/process-image/")
-def process_image(file: UploadFile = File(...)):
-    image_data = file.file.read()
-    np_image = np.frombuffer(image_data, dtype=np.uint8)
-    img = cv2.imdecode(np_image, cv2.IMREAD_COLOR)
+async def process_image(image_data: ImageData):
+    # Read the image file
+    image_file = await image_data.file.read()
 
-    with mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5) as face_detection:
-        results = face_detection.process(img)
+    # Convert the image file to a format that MediaPipe can process
+    image = Image.open(BytesIO(image_file))
+    image = np.array(image)
 
-        if results.detections:
-            detection = results.detections[0]
-            bbox = detection.location_data.relative_bounding_box
+    # Use MediaPipe to detect faces in the image
+    with mp.face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection:
+        results = face_detection.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
-            # Calculate the bounding box
-            h, w, _ = img.shape
-            x_min = int(bbox.xmin * w)
-            y_min = int(bbox.ymin * h)
-            x_max = int((bbox.xmin + bbox.width) * w)
-            y_max = int((bbox.ymin + bbox.height) * h)
+    # If a face is detected, get the facial boundaries and landmarks
+    if results.detections:
+        for detection in results.detections:
+            box = detection.location_data.relative_bounding_box
+            ih, iw, _ = image.shape
+            x, y, w, h = int(box.xmin * iw), int(box.ymin * ih), int(box.width * iw), int(box.height * ih)
 
-            # Crop the face
-            face_crop = img[y_min:y_max, x_min:x_max]
+            # Crop the image to the facial boundaries
+            cropped_image = image[y:y+h, x:x+w]
 
-            # Draw landmarks
-            for detection in results.detections:
-                mp_drawing.draw_detection(img, detection)
+            # Convert the cropped image to a format that can be returned in the response
+            cropped_image = Image.fromarray(cropped_image)
+            byte_arr = BytesIO()
+            cropped_image.save(byte_arr, format='PNG')
+            byte_arr = byte_arr.getvalue()
+            cropped_image_str = base64.b64encode(byte_arr).decode('utf-8')
 
-            # Encode the image to be returned
-            _, encoded_img = cv2.imencode('.jpg', face_crop)
-            encoded_landmarks, _ = cv2.imencode('.jpg', img)
+            # Return the cropped image and landmarks in the response
+            return {"cropped_image": cropped_image_str, "landmarks": detection.location_data.relative_keypoints}
 
-            return {
-                "cropped_image": encoded_img.tobytes(),
-                "landmarked_image": encoded_landmarks.tobytes(),
-            }
-
-    raise HTTPException(status_code=404, detail="No face detected")
+    return {"error": "No face detected"}
