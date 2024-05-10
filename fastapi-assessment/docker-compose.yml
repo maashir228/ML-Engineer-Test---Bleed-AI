@@ -1,0 +1,9 @@
+version: '3.12'
+services:
+  core_api:
+    build: .
+    container_name: "fastapi-assessment"
+    ports:
+        - "8000:8000"
+    volumes:
+        - .:/app
